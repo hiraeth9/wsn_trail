@@ -1,0 +1,21 @@
+怎么一键跑“能量耗尽 + 多恶意比例 + 论文风格画图”
+
+先安装依赖：
+
+pip install numpy pandas matplotlib
+
+
+典型论文对比：5 个算法 × 恶意比例 {10,20,30,40,50}% × 直到能量耗尽
+
+python run_all.py --all --ratios 0.1,0.2,0.3,0.4,0.5 --until-dead
+
+
+可选：重复种子做均值±标准差（更像论文）：
+
+# 重复 5 次不同随机种子
+python run_all.py --all --ratios 0.1,0.2,0.3,0.4,0.5 --until-dead --seeds 5
+
+---------------------------------------------------------------
+只跑单个算法到能量耗尽（恶意比例 30%）
+
+python run_all.py --algo trail --until-dead
