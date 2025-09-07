@@ -72,7 +72,7 @@ class DST_WOA(AlgorithmBase):
 
     @property
     def strike_threshold(self) -> int:
-        return 35
+        return 30
 
     # ===== 内部观测：用于“邻居对邻居”的行为证据（馈入 DST 的 A1/A2） =====
     def __init__(self, *args, **kwargs):
