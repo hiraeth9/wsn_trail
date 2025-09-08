@@ -40,15 +40,15 @@ class DST_WOA(AlgorithmBase):
     """
 
     # 论文参数（见文中 Phase 2）
-    MIN_ERG_RATIO = 0.60    # min_erg=0.6（相对初始能量）
-    TL_ROUNDS     = 60      # tl=60（以轮为单位近似 60s）
+    MIN_ERG_RATIO = 0.5    # min_erg=0.6（相对初始能量）
+    TL_ROUNDS     = 120      # tl=60（以轮为单位近似 60s）
 
     # 论文聚类规模：每簇“约 20 个节点”（第4节 first paragraph）
-    TARGET_CLUSTER_SIZE = 20
+    TARGET_CLUSTER_SIZE = 25
 
     # 适应度（Eq.(11)-(12)）归一化、WOA 控制参数
-    WOA_POP_FACTOR = 3      # 种群规模系数：= min(10, 3*K)
-    WOA_ITERS      = 12     # 迭代次数
+    WOA_POP_FACTOR = 1      # 种群规模系数：= min(10, 3*K)
+    WOA_ITERS      = 5    # 迭代次数
     WOA_B          = 1.0    # 螺旋参数 b
     # a 线性递减从 2->0（标准 WOA）
 
@@ -59,20 +59,20 @@ class DST_WOA(AlgorithmBase):
 
     @property
     def trust_warn(self) -> float:
-        return 0.80
+        return 0.85
 
     @property
     def trust_blacklist(self) -> float:
         # 仅用于成员接入的软阈；CH 候选无硬阈，完全由 DST 融合结果排序决定
-        return 0.35
+        return 0.25
 
     @property
     def forget(self) -> float:
-        return 0.98
+        return 0.995
 
     @property
     def strike_threshold(self) -> int:
-        return 30
+        return 50
 
     # ===== 内部观测：用于“邻居对邻居”的行为证据（馈入 DST 的 A1/A2） =====
     def __init__(self, *args, **kwargs):
@@ -147,7 +147,7 @@ class DST_WOA(AlgorithmBase):
         论文将最终“信任率”视为 T 的置信；不确定性 Ω 以 0.5 权重计入（保守下注）。
         """
         mT, mF, mO = m
-        return clamp(mT + 0.5 * mO, 0.0, 1.0)
+        return clamp(mT + 0.8 * mO, 0.0, 1.0)
 
     # --------------------------- Phase 1：CH 选择 ---------------------------
     def select_cluster_heads(self):
