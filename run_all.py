@@ -117,6 +117,7 @@ def plot_bar_with_table_highlight(
     out_path: str,
     mode: str = "max"   # "max"：取最大为最佳；"closest_to_zero"：离0最近为最佳（用于斜率）
 ):
+
     """
     生成“柱状图 + 表格”的合成图，并高亮最佳算法。
     - df: 含统计列的 DataFrame（如 robustness_slope.csv 或 pdr_auc_ratio.csv）
@@ -208,6 +209,108 @@ def plot_bar_with_table_highlight(
     plt.savefig(base + ".svg", dpi=240, bbox_inches='tight')
     plt.close(fig)
     print(f"[图] 合成版已生成：{out_path}, {base + '.svg'}, {base + '.pdf'}")
+# >>> NEW: 统计辅助——按 (algo, seed) 把各 ratio 取均值，避免比值分布权重不一致
+def _mean_by_seed(df_all: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
+    keep = ['algo', 'seed'] + cols
+    sub  = df_all[keep].copy()
+    return (sub.groupby(['algo','seed'])[cols]
+                .mean()
+                .reset_index())
+
+# >>> NEW: ① 控制开销比合成图（越低越好）
+def plot_overhead_bar(df_all: pd.DataFrame, out_dir: str):
+    by_seed = _mean_by_seed(df_all, ['overhead_ratio'])
+    stat = (by_seed.groupby('algo', as_index=False)
+                  .agg(overhead_ratio_mean=('overhead_ratio','mean'),
+                       overhead_ratio_std =('overhead_ratio','std'),
+                       n=('overhead_ratio','count')))
+    stat['overhead_ratio_ci95'] = 1.96 * stat['overhead_ratio_std'] / np.sqrt(np.maximum(stat['n'], 1))
+    plot_bar_with_table_highlight(
+        df=stat, xcol='algo',
+        ycol_mean='overhead_ratio_mean', ycol_ci95='overhead_ratio_ci95', ncol='n',
+        title='Control Overhead Ratio (lower is better)',
+        ylabel='control bits / (payload bits over rounds)',
+        out_path=os.path.join(out_dir, 'fig_overhead_ratio_bar_table.png'),
+        mode='closest_to_zero'   # 越接近0越好 = 越小越好
+    )
+
+# >>> NEW: ② 单位成功传输能耗合成图（越低越好）
+def plot_energy_per_delivered_bar(df_all: pd.DataFrame, out_dir: str):
+    by_seed = _mean_by_seed(df_all, ['energy_per_delivered'])
+    stat = (by_seed.groupby('algo', as_index=False)
+                  .agg(ed_mean=('energy_per_delivered','mean'),
+                       ed_std =('energy_per_delivered','std'),
+                       n=('energy_per_delivered','count')))
+    stat['ed_ci95'] = 1.96 * stat['ed_std'] / np.sqrt(np.maximum(stat['n'], 1))
+    plot_bar_with_table_highlight(
+        df=stat, xcol='algo',
+        ycol_mean='ed_mean', ycol_ci95='ed_ci95', ncol='n',
+        title='Energy per Delivered (lower is better)',
+        ylabel='energy per delivered data unit',
+        out_path=os.path.join(out_dir, 'fig_energy_per_delivered_bar_table.png'),
+        mode='closest_to_zero'
+    )
+
+# >>> NEW: ③ 胜率图（以 PDR 为例：每个 ratio 看谁最高）
+def plot_winrate_pdr(df_all: pd.DataFrame, out_dir: str):
+    # 对每个 (ratio, algo) 先在 seed 维度取均值，再在 ratio 维度找赢家
+    p = (df_all.groupby(['ratio','algo'])['pdr']
+               .mean()
+               .reset_index())
+    winners = p.loc[p.groupby('ratio')['pdr'].idxmax()]
+    win = (winners['algo'].value_counts()
+                     .rename_axis('algo')
+                     .reset_index(name='wins'))
+    # 画水平条形图
+    plt.figure(figsize=(8, 4.2))
+    ys = np.arange(len(win))
+    plt.barh(ys, win['wins'].to_numpy())
+    plt.yticks(ys, win['algo'].tolist())
+    plt.xlabel('Number of ratios won (by highest PDR)')
+    plt.title('Win-rate across malicious ratios (metric: PDR)')
+    for y, v in zip(ys, win['wins'].tolist()):
+        plt.text(v + 0.1, y, str(v), va='center')
+    plt.tight_layout()
+    plt.savefig(os.path.join(out_dir, 'fig_winrate_pdr.png'), dpi=150)
+    plt.savefig(os.path.join(out_dir, 'fig_winrate_pdr.svg'), dpi=150)
+    plt.close()
+
+# >>> NEW: ④ 可靠性–开销 Pareto（横轴 AUC_R，纵轴 Overhead，左下角更优）
+def plot_pareto_auc_overhead(df_all: pd.DataFrame, auc_stat: pd.DataFrame, out_dir: str):
+    # 平均 overhead（按 (algo, seed) 先均值，然后到 algo）
+    over = _mean_by_seed(df_all, ['overhead_ratio'])
+    over_m = (over.groupby('algo', as_index=False)
+                   .agg(overhead_ratio_mean=('overhead_ratio','mean')))
+    # 合并 AUC_R（已有：algo, auc_norm_mean）
+    m = pd.merge(auc_stat[['algo','auc_norm_mean']], over_m, on='algo', how='inner')
+
+    # 计算 Pareto 前沿：AUC 越大越好，Overhead 越小越好
+    pts = m[['auc_norm_mean','overhead_ratio_mean']].to_numpy()
+    is_dom = np.zeros(len(m), dtype=bool)
+    for i,(x,y) in enumerate(pts):
+        dominated = False
+        for j,(x2,y2) in enumerate(pts):
+            if j==i: continue
+            if (x2>=x and y2<=y) and ((x2>x) or (y2<y)):
+                dominated = True; break
+        is_dom[i] = dominated
+    front = m.loc[~is_dom].sort_values(['auc_norm_mean','overhead_ratio_mean'], ascending=[True, True])
+
+    # 画散点 + 前沿折线
+    plt.figure(figsize=(6.6, 5.2))
+    for _, r in m.iterrows():
+        plt.scatter(r['auc_norm_mean'], r['overhead_ratio_mean'])
+        plt.text(r['auc_norm_mean']+1e-4, r['overhead_ratio_mean']+1e-4, r['algo'], fontsize=9)
+    if len(front) >= 2:
+        plt.plot(front['auc_norm_mean'], front['overhead_ratio_mean'])
+    plt.xlabel('AUC_R of PDR–ratio (higher is better)')
+    plt.ylabel('Control Overhead Ratio (lower is better)')
+    plt.title('Reliability vs. Control Overhead (Pareto)')
+    plt.grid(True, linestyle='--', alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(os.path.join(out_dir, 'fig_pareto_auc_overhead.png'), dpi=150)
+    plt.savefig(os.path.join(out_dir, 'fig_pareto_auc_overhead.svg'), dpi=150)
+    plt.close()
 
 
 def run_all_tags(tags, n_nodes:int, n_malicious:int, seeds:list, rounds:int, until_dead:bool, out_dir:str, suffix:str=""):
@@ -606,6 +709,12 @@ def main():
         )
 
         # === 仍保留你原有的折线图输出（PDR/寿命等） ===
+        # >>> NEW: 追加 4 张“论文友好型”合成图
+        plot_overhead_bar(df_all, out_dir)
+        plot_energy_per_delivered_bar(df_all, out_dir)
+        plot_winrate_pdr(df_all, out_dir)
+        plot_pareto_auc_overhead(df_all, auc_stat, out_dir)
+
         plot_lines_with_error(df_all, out_dir, seeds=args.seeds)
         print(
             "批量完成：summary_all.csv、robustness_slope.csv、pdr_auc_ratio*.csv、以及合成图 fig_*_bar_table.png 与 line_*.png。")

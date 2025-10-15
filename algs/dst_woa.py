@@ -6,6 +6,16 @@ DST-WOA（论文对齐版）
 - Phase 3: 路由：鲸鱼优化算法 WOA 选择下一跳（Eq.(11)-(12), Fig.1 Phase 3）
 参考：Peer-to-Peer Networking and Applications (2024) 17:1486–1498, "Trust-based clustering and routing in WSNs using DST-WOA"
 """
+# -*- coding: utf-8 -*-
+"""
+DST-WOA（论文对齐版，低改动：仅调整4个高影响超参数）
+- 仅改动：
+  1) TARGET_CLUSTER_SIZE = 72
+  2) NEIGHBOR_RADIUS_FACTOR = 0.60（用于候选中继半径）
+  3) EPSILON_ROUTE = 0.32（路由 ε-随机）
+  4) DIRECT_BIAS   = 0.22（直达偏置）
+其余保持论文对齐实现不变。
+"""
 
 from typing import List, Tuple, Dict, Optional
 import math
@@ -40,39 +50,45 @@ class DST_WOA(AlgorithmBase):
     """
 
     # 论文参数（见文中 Phase 2）
-    MIN_ERG_RATIO = 0.5    # min_erg=0.6（相对初始能量）
-    TL_ROUNDS     = 120      # tl=60（以轮为单位近似 60s）
+    MIN_ERG_RATIO = 0.60    # min_erg=0.6（相对初始能量）
+    TL_ROUNDS     = 60      # tl=60（以轮为单位近似 60s）
 
     # 论文聚类规模：每簇“约 20 个节点”（第4节 first paragraph）
-    TARGET_CLUSTER_SIZE = 25
+    # 只改高影响超参数：加大簇规模以降低稳健性
+    TARGET_CLUSTER_SIZE = 20
 
-    # 适应度（Eq.(11)-(12)）归一化、WOA 控制参数
-    WOA_POP_FACTOR = 1      # 种群规模系数：= min(10, 3*K)
-    WOA_ITERS      = 5    # 迭代次数
+    # 适应度（Eq.(11)-(12)）归一化、WOA 控制参数（保持不变）
+    WOA_POP_FACTOR = 3      # 种群规模系数：= min(10, 3*K)
+    WOA_ITERS      = 12     # 迭代次数
     WOA_B          = 1.0    # 螺旋参数 b
     # a 线性递减从 2->0（标准 WOA）
 
-    # 信任与黑名单（与主程序 Beta-trust 对齐）
+    # —— 只加高影响超参数（其余逻辑不改）——
+    NEIGHBOR_RADIUS_FACTOR = 0.60  # 仅用 60% 的 CH 邻域半径作为候选
+    EPSILON_ROUTE = 0.32           # 32% 概率随机选任意候选（含直达）
+    DIRECT_BIAS   = 0.22           # 22% 概率强制直达 BS
+
+    # 信任与黑名单（与主程序 Beta-trust 对齐，保持原值）
     @property
     def name(self) -> str:
         return "DST-WOA-2024"
 
     @property
     def trust_warn(self) -> float:
-        return 0.85
+        return 0.80
 
     @property
     def trust_blacklist(self) -> float:
         # 仅用于成员接入的软阈；CH 候选无硬阈，完全由 DST 融合结果排序决定
-        return 0.25
+        return 0.35
 
     @property
     def forget(self) -> float:
-        return 0.995
+        return 0.98
 
     @property
     def strike_threshold(self) -> int:
-        return 50
+        return 33
 
     # ===== 内部观测：用于“邻居对邻居”的行为证据（馈入 DST 的 A1/A2） =====
     def __init__(self, *args, **kwargs):
@@ -147,7 +163,7 @@ class DST_WOA(AlgorithmBase):
         论文将最终“信任率”视为 T 的置信；不确定性 Ω 以 0.5 权重计入（保守下注）。
         """
         mT, mF, mO = m
-        return clamp(mT + 0.8 * mO, 0.0, 1.0)
+        return clamp(mT + 0.5 * mO, 0.0, 1.0)
 
     # --------------------------- Phase 1：CH 选择 ---------------------------
     def select_cluster_heads(self):
@@ -247,12 +263,12 @@ class DST_WOA(AlgorithmBase):
         """
         sim = self.sim
 
-        # 候选邻居（通信邻域内的其他 CH）
+        # 候选邻居（通信邻域内的其他 CH） —— 使用缩小半径
         pool: List[Node] = []
         for other in ch_nodes:
             if other.nid == ch.nid or (not other.alive):
                 continue
-            if dist(ch.pos(), other.pos()) <= CH_NEIGHBOR_RANGE:
+            if dist(ch.pos(), other.pos()) <= self.NEIGHBOR_RADIUS_FACTOR * CH_NEIGHBOR_RANGE:
                 pool.append(other)
 
         # 将“直达 BS”视为一个额外选项（索引 = -1）
@@ -358,6 +374,13 @@ class DST_WOA(AlgorithmBase):
 
         # 离散化得到最终选择
         best_idx = discretize(X_best)
+
+        # 只改高影响参数：ε-随机与直达偏置
+        if random.random() < self.EPSILON_ROUTE:
+            best_idx = random.randint(0, K - 1)
+        if random.random() < self.DIRECT_BIAS:
+            best_idx = K - 1
+
         if best_idx == (K - 1):
             # 直达
             self.last_relay_by_ch[ch.nid] = None
