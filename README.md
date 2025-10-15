@@ -1,2 +1,2 @@
 # trail
-WSN
+WSN对比试验框架
